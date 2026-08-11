@@ -1,0 +1,211 @@
+// =============================================================================
+// Cloudora ATO Investigation — KQL Queries
+// Tables: CloudoraSignIn_CL, CloudoraAudit_CL
+// Platform: Azure Data Explorer
+// =============================================================================
+
+
+// ─────────────────────────────────────────────
+// SECTION 1: DATA VALIDATION
+// Confirm tables loaded correctly before investigating
+// ─────────────────────────────────────────────
+
+// 1.1 — Row counts
+CloudoraSignIn_CL | count
+// Expected: ~22
+
+CloudoraAudit_CL | count
+// Expected: ~8
+
+// 1.2 — Confirm ResultType ingested as string (required for error code filtering)
+CloudoraSignIn_CL
+| where ErrorCode == "50126"
+| count
+// If this returns 0, ErrorCode was ingested as int — re-upload with type override
+
+
+// ─────────────────────────────────────────────
+// SECTION 2: INITIAL TRIAGE
+// Get a lay of the land before focusing on the flagged account
+// ─────────────────────────────────────────────
+
+// 2.1 — All sign-in events ordered chronologically
+CloudoraSignIn_CL
+| project TimeGenerated, UserPrincipalName, IPAddress, City, CountryOrRegion,
+          Status, ErrorCode, FailureReason
+| order by TimeGenerated asc
+
+// 2.2 — All failed sign-ins (password spray candidates)
+CloudoraSignIn_CL
+| where Status == "Failure"
+| project TimeGenerated, UserPrincipalName, IPAddress, City,
+          CountryOrRegion, ErrorCode, FailureReason
+| order by TimeGenerated asc
+
+// 2.3 — Failed logins grouped by source IP — find spray sources
+CloudoraSignIn_CL
+| where Status == "Failure"
+| summarize FailCount = count(),
+            Accounts = make_set(UserPrincipalName),
+            FirstSeen = min(TimeGenerated),
+            LastSeen = max(TimeGenerated)
+            by IPAddress, City, CountryOrRegion
+| order by FailCount desc
+
+// 2.4 — Failed logins grouped by targeted account
+CloudoraSignIn_CL
+| where Status == "Failure"
+| summarize FailCount = count(),
+            SourceIPs = make_set(IPAddress),
+            Countries = make_set(CountryOrRegion)
+            by UserPrincipalName
+| order by FailCount desc
+
+
+// ─────────────────────────────────────────────
+// SECTION 3: COMPROMISED ACCOUNT — alice.mehra
+// Deep dive on the primary victim
+// ─────────────────────────────────────────────
+
+// 3.1 — Full sign-in history for alice.mehra
+CloudoraSignIn_CL
+| where UserPrincipalName == "alice.mehra@cloudora.com"
+| project TimeGenerated, IPAddress, City, CountryOrRegion,
+          Status, ErrorCode, FailureReason, DeviceDetail
+| order by TimeGenerated asc
+
+// 3.2 — Impossible travel check: different countries same day
+CloudoraSignIn_CL
+| where UserPrincipalName == "alice.mehra@cloudora.com"
+| where Status == "Success"
+| project TimeGenerated, IPAddress, City, CountryOrRegion
+| order by TimeGenerated asc
+// Result: Pune/IN at 02:14 → Bucharest/RO at 03:11 — impossible travel confirmed
+
+// 3.3 — Timeline of attack on alice.mehra (failures + success window)
+CloudoraSignIn_CL
+| where UserPrincipalName == "alice.mehra@cloudora.com"
+| where TimeGenerated between (datetime(2026-08-05T03:00:00Z) .. datetime(2026-08-05T04:00:00Z))
+| project TimeGenerated, IPAddress, City, CountryOrRegion, Status, ErrorCode, FailureReason
+| order by TimeGenerated asc
+
+// 3.4 — Audit events for alice.mehra (post-compromise actions)
+CloudoraAudit_CL
+| where UserPrincipalName == "alice.mehra@cloudora.com"
+| project TimeGenerated, ActivityDisplayName, Category, Result, TargetResource, IPAddress
+| order by TimeGenerated asc
+
+// 3.5 — Cross-correlate: all events from attacker IP 185.220.101.14
+CloudoraSignIn_CL
+| where IPAddress == "185.220.101.14"
+| project TimeGenerated, UserPrincipalName, Status, ErrorCode, City, CountryOrRegion
+| order by TimeGenerated asc
+
+// 3.6 — Audit events from attacker IP (post-compromise actions)
+CloudoraAudit_CL
+| where IPAddress == "185.220.101.14"
+| project TimeGenerated, ActivityDisplayName, Category, Result, TargetResource
+| order by TimeGenerated asc
+
+
+// ─────────────────────────────────────────────
+// SECTION 4: PERSISTENCE & POST-COMPROMISE
+// Identify what the attacker set up to maintain access
+// ─────────────────────────────────────────────
+
+// 4.1 — MFA / security info registration events (T1098.005)
+CloudoraAudit_CL
+| where ActivityDisplayName == "Register security info"
+| project TimeGenerated, UserPrincipalName, IPAddress, Result, TargetResource
+
+// 4.2 — Inbox rule creation (T1564.008 — BEC staging)
+CloudoraAudit_CL
+| where ActivityDisplayName == "New-InboxRule"
+| project TimeGenerated, UserPrincipalName, IPAddress, Result, TargetResource
+
+// 4.3 — Mailbox configuration changes (Set-Mailbox)
+CloudoraAudit_CL
+| where ActivityDisplayName == "Set-Mailbox"
+| project TimeGenerated, UserPrincipalName, IPAddress, Result, TargetResource
+
+// 4.4 — App role assignment (T1098.003 — privilege escalation)
+CloudoraAudit_CL
+| where ActivityDisplayName contains "role assignment"
+| project TimeGenerated, UserPrincipalName, ActivityDisplayName,
+          Category, Result, TargetResource, IPAddress
+
+// 4.5 — Refresh token manipulation (T1550.001)
+CloudoraAudit_CL
+| where ActivityDisplayName contains "StsRefreshToken"
+| project TimeGenerated, UserPrincipalName, IPAddress, Result
+
+
+// ─────────────────────────────────────────────
+// SECTION 5: LATERAL TARGETING
+// Identify other accounts the attacker attempted to compromise
+// ─────────────────────────────────────────────
+
+// 5.1 — All failed logins from non-India IPs
+CloudoraSignIn_CL
+| where Status == "Failure"
+| where CountryOrRegion !in ("IN")
+| project TimeGenerated, UserPrincipalName, IPAddress, City,
+          CountryOrRegion, ErrorCode, FailureReason
+| order by TimeGenerated asc
+
+// 5.2 — Admin account activity — check for privilege escalation path
+CloudoraSignIn_CL
+| where UserPrincipalName == "admin@cloudora.com"
+| project TimeGenerated, IPAddress, City, CountryOrRegion, Status, ErrorCode, FailureReason
+| order by TimeGenerated asc
+
+CloudoraAudit_CL
+| where UserPrincipalName == "admin@cloudora.com"
+| project TimeGenerated, ActivityDisplayName, Category, Result, TargetResource, IPAddress
+
+// 5.3 — All unique IPs that attempted sign-ins (for IOC list)
+CloudoraSignIn_CL
+| where Status == "Failure"
+| summarize TargetedAccounts = make_set(UserPrincipalName)
+            by IPAddress, City, CountryOrRegion
+| order by CountryOrRegion asc
+
+// 5.4 — Check specific accounts for lateral movement evidence
+CloudoraSignIn_CL
+| where UserPrincipalName in ("vikram.singh@cloudora.com", "priya.nair@cloudora.com")
+| project TimeGenerated, UserPrincipalName, IPAddress, City,
+          CountryOrRegion, Status, ErrorCode
+| order by TimeGenerated asc
+
+
+// ─────────────────────────────────────────────
+// SECTION 6: SPECIFIC USER INVESTIGATION
+// Used to rule out or confirm additional compromised accounts
+// ─────────────────────────────────────────────
+
+// 6.1 — neha.kapoor sign-in review (impossible travel check)
+CloudoraSignIn_CL
+| where UserPrincipalName == "neha.kapoor@cloudora.com"
+| where TimeGenerated between (datetime(2026-08-02) .. datetime(2026-08-06))
+| project TimeGenerated, AppDisplayName, IPAddress, City, CountryOrRegion,
+          ErrorCode, ConditionalAccessStatus
+| order by TimeGenerated asc
+// Result: 3 successful logins — Pimpri-Chinchwad (IN) and Singapore (SG) same day
+// Flagged for follow-up; no audit events or failures to confirm compromise
+
+
+// ─────────────────────────────────────────────
+// SECTION 7: IOC SUMMARY
+// Compile all attacker infrastructure for reporting
+// ─────────────────────────────────────────────
+
+// 7.1 — All external IPs associated with failures or attacker activity
+let AttackerIPs = dynamic(["185.220.101.14", "41.203.72.5",
+                            "156.146.55.201", "196.52.43.19", "192.0.2.44"]);
+CloudoraSignIn_CL
+| where IPAddress in (AttackerIPs)
+| summarize Events = count(),
+            Accounts = make_set(UserPrincipalName),
+            Statuses = make_set(Status)
+            by IPAddress, City, CountryOrRegion
+| order by Events desc

@@ -1,0 +1,9 @@
+TimeGenerated,UserPrincipalName,ActivityDisplayName,Category,Result,ResultReason,TargetResource,IPAddress,CorrelationId
+2026-08-05T03:13:05Z,alice.mehra@cloudora.com,Update user,UserManagement,success,,alice.mehra@cloudora.com,185.220.101.14,a1c9e2f0-1111-4a11-9a11-000000000007
+2026-08-05T03:14:22Z,alice.mehra@cloudora.com,Register security info,UserManagement,success,New MFA method (Authenticator) registered,alice.mehra@cloudora.com,185.220.101.14,a1c9e2f0-1111-4a11-9a11-000000000023
+2026-08-05T03:16:47Z,alice.mehra@cloudora.com,Set-Mailbox,Exchange,success,Inbox rule created: forward all mail to external address,alice.mehra@cloudora.com,185.220.101.14,a1c9e2f0-1111-4a11-9a11-000000000024
+2026-08-05T03:17:59Z,alice.mehra@cloudora.com,New-InboxRule,Exchange,success,Rule name: 'Archive' - moves and deletes security alert emails,alice.mehra@cloudora.com,185.220.101.14,a1c9e2f0-1111-4a11-9a11-000000000025
+2026-08-05T03:21:14Z,alice.mehra@cloudora.com,Add app role assignment to service principal,ApplicationManagement,success,Mail.Read granted to unfamiliar app 'QuickSync Connector',alice.mehra@cloudora.com,185.220.101.14,a1c9e2f0-1111-4a11-9a11-000000000026
+2026-08-05T03:25:38Z,alice.mehra@cloudora.com,Update StsRefreshTokenValidFrom Timestamp,UserManagement,success,,alice.mehra@cloudora.com,185.220.101.14,a1c9e2f0-1111-4a11-9a11-000000000027
+2026-08-05T09:41:02Z,admin@cloudora.com,Add member to role,RoleManagement,failure,Insufficient privileges - MFA challenge not completed,Global Administrator,192.0.2.44,a1c9e2f0-1111-4a11-9a11-000000000014
+2026-08-05T11:53:10Z,priya.nair@cloudora.com,Update user,UserManagement,failure,Sign-in failed prior to action,priya.nair@cloudora.com,156.146.55.201,a1c9e2f0-1111-4a11-9a11-000000000016
